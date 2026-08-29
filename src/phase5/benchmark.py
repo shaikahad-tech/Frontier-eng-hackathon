@@ -13,7 +13,8 @@ import os, re, json, math, time, shutil, hashlib, statistics
 from typing import Any, Optional
 from collections import defaultdict
 
-from src.phase5.repos import GROUND_TRUTH, SCORING_RUBRICS, generate_all_repos, REPO_GENERATORS
+from src.phase5.ground_truth import GROUND_TRUTH, SCORING_RUBRICS
+from src.phase5.repos import generate_all_repos, REPO_GENERATORS
 
 
 # ═══════════════════════════════════════════════════════════════
