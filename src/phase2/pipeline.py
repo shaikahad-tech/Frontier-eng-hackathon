@@ -52,6 +52,10 @@ class Pipeline:
             from src.phase2.analyzers import extended_analyzers  # noqa: F401
         except ImportError as e:
             if self.verbose: print(f"Warning: extended analyzers failed to import: {e}")
+        try:
+            from src.phase2.analyzers import extended_analyzers_part2  # noqa: F401
+        except ImportError as e:
+            if self.verbose: print(f"Warning: extended analyzers part 2 failed to import: {e}")
 
     def run(self) -> dict:
         """Run the full analysis pipeline."""
