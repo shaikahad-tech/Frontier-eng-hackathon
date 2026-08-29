@@ -1,6 +1,6 @@
 # Reproduction Guide
 
-This guide is written for someone starting from a clean environment. It walks through setup, running the solution, running the baseline, and running the evaluation.
+This guide is written for someone starting from a clean environment. It walks through setup, running both Phase 1 and Phase 2, running the evaluation, and verifying results.
 
 ## Prerequisites
 
@@ -11,10 +11,7 @@ This guide is written for someone starting from a clean environment. It walks th
 ## Setup
 
 ```bash
-# 1. Clone or unpack the repository
 cd repo-assess
-
-# 2. Install dependencies
 pip install -r requirements.txt
 ```
 
@@ -26,9 +23,7 @@ No API keys are required. The solution is fully deterministic and reproducible.
 
 ## Data required
 
-No external data is needed. The 12 test repositories are generated synthetically by `src/generate_test_repos.py`. Each repository is a small Python project with known quality characteristics.
-
-The ground truth scores are defined in `src/generate_test_repos.py` in the `GROUND_TRUTH` dictionary and saved to `test_repos/ground_truth.json`.
+No external data is needed. The 12 test repositories are generated synthetically by `src/generate_test_repos.py`.
 
 ## Generate test repositories
 
@@ -36,87 +31,76 @@ The ground truth scores are defined in `src/generate_test_repos.py` in the `GROU
 python -m src.generate_test_repos
 ```
 
-This creates 12 test repositories in `test_repos/`:
+This creates 12 test repositories in `test_repos/` with known quality characteristics.
 
-| Repo | Score | Description |
-|---|---|---|
-| `platinum_repo` | 9 | Excellent: tests, docs, low complexity, Dockerfile |
-| `good_with_tests` | 8 | Good quality with strong test suite |
-| `well_documented` | 8 | Excellent docstrings and documentation |
-| `no_tests` | 4 | Decent code but zero tests |
-| `high_complexity` | 4 | Overly complex code, hard to maintain |
-| `tech_debt_heavy` | 2 | TODOs, FIXMEs, hacks throughout |
-| `no_readme` | 2 | Missing README, minimal code |
-| `single_author` | 3 | Single contributor, low activity |
-| `minimal_project` | 1 | Bare minimum, almost empty |
-| `dependency_heavy` | 3 | 30+ dependencies, no tests |
-| `mixed_quality` | 5 | Some good, some bad — the challenging case |
-| `broken_tests` | 3 | Tests exist but are deliberately broken |
-
-Each repository is initialized as a git repo with multiple commits and tags.
-
-## Run the full evaluation (baseline vs advanced)
+## Phase 1: Run the evaluation (baseline vs advanced)
 
 ```bash
 python -m src.evaluate
 ```
 
-This runs both the baseline and advanced solutions on all 12 test repos and prints a comparison table. Results are saved to:
-- `evaluation/full_results.json` — complete results for every repo
-- `evaluation/report.json` — summary metrics
-- `evaluation/report.md` — human-readable markdown report
-
-### Expected output
-
+Expected output:
 ```
-======================================================================
-EVALUATION SUMMARY
-======================================================================
-Total test repositories: 12
-
-PRIMARY METRIC: Mean Absolute Error (score accuracy)
-  Baseline MAE:  1.92
-  Advanced MAE:  0.92
-  Improvement:   1.0 (52.2%)
-
-Ranking accuracy:
-  Baseline:  0.697
-  Advanced:  0.864
-
-Finding specificity:
-  Baseline:  42 findings
-  Advanced:  175 findings
-
-Recommendation accuracy:
-  Baseline:  6/12 (50.0%)
-  Advanced:  10/12 (83.3%)
+Baseline MAE:  1.92
+Advanced MAE:  0.92
+Improvement:   1.0 (52.2%)
 ```
 
-## Run the baseline on a single repo
-
-```bash
-python -m src.baseline test_repos/platinum_repo
-```
-
-Output: JSON assessment with overall_score, quality_tier, strengths, weaknesses, recommendation, and confidence.
-
-## Run the advanced solution on a single repo
+## Phase 1: Assess a single repo
 
 ```bash
 python -m src.advanced test_repos/platinum_repo
+python -m src.baseline test_repos/platinum_repo
 ```
 
-Output: JSON assessment with dimension scores, evidence-backed findings, verification results, and overall recommendation.
-
-## Run on any repository
+## Phase 2: Run the production-grade pipeline
 
 ```bash
-# Clone a real repo
-git clone https://github.com/psf/requests /tmp/requests
+# Run the full Phase 2 analysis
+python -m src.phase2.pipeline test_repos/platinum_repo
 
-# Assess it
-python -m src.advanced /tmp/requests
-python -m src.baseline /tmp/requests
+# Save reports to a specific directory
+python -m src.phase2.pipeline test_repos/platinum_repo --output phase2_reports
+
+# Run sequentially (for debugging)
+python -m src.phase2.pipeline test_repos/platinum_repo --sequential
+
+# Quiet mode
+python -m src.phase2.pipeline test_repos/platinum_repo --quiet
+```
+
+Phase 2 produces three reports:
+- `phase2_output/executive_report.md` — executive summary with top risks and strengths
+- `phase2_output/engineering_report.md` — detailed findings with evidence, CWE/OWASP mappings
+- `phase2_output/machine_report.json` — strict JSON for downstream processing
+
+## Phase 2: Quality gate check (CI/CD integration)
+
+```bash
+# First generate the machine report
+python -m src.phase2.pipeline /path/to/repo --output reports
+
+# Then check quality gates
+python -m src.phase2.gates reports/machine_report.json --min-score 70 --no-critical
+
+# Exit codes: 0=pass, 1=gate failed, 2=analyzer error, 3=invalid config
+```
+
+## Phase 1 vs Phase 2 comparison
+
+To reproduce the comparison data from the README:
+
+```bash
+# Generate test repos
+python -m src.generate_test_repos
+
+# Run Phase 1 evaluation
+python -m src.evaluate
+
+# Run Phase 2 on each test repo
+for repo in test_repos/*/; do
+    python -m src.phase2.pipeline "$repo" --quiet --output "phase2_output/$(basename $repo)"
+done
 ```
 
 ## Run the test suite
@@ -125,19 +109,11 @@ python -m src.baseline /tmp/requests
 pytest tests/ -v
 ```
 
-Expected: 45 tests pass, covering tools, baseline, advanced, edge cases, and trajectory logging.
+Expected: 65 tests pass (45 Phase 1 + 20 Phase 2).
 
 ## Agent trajectories
 
-Every run produces trajectory logs in `trajectories/`:
-- `baseline_<timestamp>.json` — baseline agent trajectory
-- `advanced_orchestrator_<timestamp>.json` — orchestrator trajectory
-- `advanced_structure_<timestamp>.json` — structure agent trajectory
-- `advanced_test_<timestamp>.json` — test agent trajectory
-- `advanced_code_quality_<timestamp>.json` — code quality agent trajectory
-- `advanced_maintenance_<timestamp>.json` — maintenance agent trajectory
-
-Each trajectory contains:
+Every Phase 1 agent run produces trajectory logs in `trajectories/`. Each trajectory contains:
 - Agent name and start time
 - Instructions received
 - Every tool call with inputs and outputs
@@ -150,29 +126,29 @@ Each trajectory contains:
 - Python: 3.12
 - pytest: 8.0+
 - Git: 2.39+
-- OS: Linux/macOS (Windows should work but is untested)
+- OS: Linux/macOS
 
 ## Runtime and cost
 
-- Generate test repos: ~5 seconds
-- Full evaluation (12 repos, baseline + advanced): ~30 seconds
-- Single repo assessment (advanced): ~2 seconds
-- Single repo assessment (baseline): ~0.01 seconds
-- Cost: $0 (no API calls, fully local)
+| Operation | Time | Cost |
+|---|---|---|
+| Generate test repos | ~5s | $0 |
+| Phase 1 full evaluation (12 repos) | ~30s | $0 |
+| Phase 2 single repo analysis | ~0.14s | $0 |
+| Phase 1 single repo (advanced) | ~2.6s | $0 |
+| Phase 1 single repo (baseline) | ~0.01s | $0 |
 
 ## Verifying the main result
-
-To verify the main result from a clean environment:
 
 ```bash
 pip install -r requirements.txt
 python -m src.generate_test_repos
 python -m src.evaluate
+pytest tests/ -v
 ```
 
 The evaluation output should show:
 - Baseline MAE: ~1.92
 - Advanced MAE: ~0.92
 - Improvement: ~52.2%
-
-If the numbers match, the result is reproduced.
+- 65 tests passing
