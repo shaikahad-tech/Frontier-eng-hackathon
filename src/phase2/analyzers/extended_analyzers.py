@@ -50,7 +50,6 @@ class TestExecutionAnalyzer(AnalyzerBase):
         passed = failed = errors = skipped = 0
         test_command = None
 
-        # Try pytest
         if "pytest" in test_framework or os.path.exists(os.path.join(repo_path, "pytest.ini")):
             test_command = "pytest"
             try:
@@ -59,7 +58,6 @@ class TestExecutionAnalyzer(AnalyzerBase):
                     cwd=repo_path, capture_output=True, text=True, timeout=30
                 )
                 output = result.stdout + result.stderr
-                # Parse pytest output
                 for line in output.splitlines():
                     if "passed" in line and "failed" not in line:
                         m = re.search(r'(\d+) passed', line)
@@ -196,7 +194,6 @@ class DeadCodeAnalyzer(AnalyzerBase):
             try: tree = ast.parse(content)
             except SyntaxError: continue
 
-            # Check for unused imports
             imported_names = set()
             used_names = set()
             for node in ast.walk(tree):
@@ -216,14 +213,13 @@ class DeadCodeAnalyzer(AnalyzerBase):
             unused = imported_names - used_names - {"__all__", "__version__"}
             for name in unused:
                 unused_imports += 1
-                if unused_imports <= 20:  # Limit findings
+                if unused_imports <= 20:
                     self._add_finding(Finding(id="DEAD-001", category="maintainability", severity=Severity.LOW.value,
                         status=Status.WARN.value, title=f"Unused import: {name} in {rel}",
                         confidence=0.6, files=[{"path": rel}],
                         evidence=f"Import '{name}' not used in file",
                         recommendation="Remove unused import."))
 
-            # Check for unreachable code after return/raise
             for node in ast.walk(tree):
                 if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                     for i, stmt in enumerate(node.body):
@@ -253,7 +249,6 @@ class DuplicationAnalyzer(AnalyzerBase):
 
     def analyze(self, repo_path, context):
         import time as _t; start = _t.time()
-        # Simple approach: hash normalized 6-line blocks
         block_hashes = {}
         duplicates = 0
         min_lines = 6
@@ -313,11 +308,9 @@ class ConfigAnalyzer(AnalyzerBase):
                         env_vars_documented.add(line.split("=")[0].strip())
             elif fname.endswith(".py"):
                 content = _safe_read(filepath)
-                # Find os.environ and os.getenv references
                 for m in re.finditer(r'os\.(?:environ(?:\.get)?|getenv)\(["\']([^"\']+)["\']', content):
                     env_vars_in_code.add(m.group(1))
 
-        # Check for undocumented env vars
         undocumented = env_vars_in_code - env_vars_documented
         for var in list(undocumented)[:10]:
             self._add_finding(Finding(id="ENV-003", category="reliability", severity=Severity.LOW.value,
@@ -325,7 +318,6 @@ class ConfigAnalyzer(AnalyzerBase):
                 confidence=0.7, evidence=f"Code references {var} but no .env.example documents it",
                 recommendation="Document required environment variables in .env.example."))
 
-        # Check for committed .env (potential secrets)
         if has_dotenv:
             self._add_finding(Finding(id="ENV-001", category="security", severity=Severity.HIGH.value,
                 status=Status.WARN.value, title=".env file committed to repository",
@@ -374,7 +366,6 @@ class ObservabilityAnalyzer(AnalyzerBase):
             if "health" in content.lower() and ("endpoint" in content.lower() or "route" in content.lower() or "/health" in content):
                 has_health = True
 
-        # Context-aware: CLI doesn't need observability
         if profile in ("CLI", "SCRIPT", "LIBRARY", "EDUCATIONAL", "EXPERIMENT"):
             score = 70 if has_logging else 40
             self._set_raw_data("observability", {"profile": profile, "has_logging": has_logging,
@@ -382,7 +373,6 @@ class ObservabilityAnalyzer(AnalyzerBase):
             self._add_metric("observability_score", score)
             return self._build_result(_t.time() - start)
 
-        # Service/API profiles need more
         score = 30
         if has_logging: score += 20
         if has_structured: score += 15
@@ -420,7 +410,6 @@ class APIAnalysisAnalyzer(AnalyzerBase):
         profile = context.get("discovery", {}).get("project_profile", "UNKNOWN")
         frameworks = context.get("discovery", {}).get("frameworks", [])
 
-        # Only run for API/web profiles
         if profile not in ("API", "WEB_APP", "BACKEND_SERVICE"):
             self._set_raw_data("api", {"applicable": False, "score": 50, "note": f"Not applicable for {profile}"})
             self._add_metric("api_score", 50)
@@ -431,7 +420,6 @@ class APIAnalysisAnalyzer(AnalyzerBase):
         for filepath, fname, root in _walk_python_files(repo_path):
             content = _safe_read(filepath)
             rel = os.path.relpath(filepath, repo_path)
-            # Detect Flask/FastAPI/Django routes
             for m in re.finditer(r'@(?:app|router|blueprint)\.(get|post|put|delete|patch|route)\(["\']([^"\']+)["\']', content):
                 routes.append({"method": m.group(1).upper(), "path": m.group(2), "file": rel})
             if "openapi" in content.lower() or "swagger" in content.lower() or "api.yaml" in fname.lower():
@@ -441,7 +429,6 @@ class APIAnalysisAnalyzer(AnalyzerBase):
             if "jwt" in content.lower() or "auth" in content.lower() or "token" in content.lower():
                 has_auth = True
 
-        # Check for openapi spec files
         for spec_file in ["openapi.yaml", "openapi.json", "swagger.yaml", "swagger.json"]:
             if os.path.exists(os.path.join(repo_path, spec_file)):
                 has_openapi = True
@@ -470,4 +457,3 @@ class APIAnalysisAnalyzer(AnalyzerBase):
         self._add_metric("api_score", score)
         self._add_metric("route_count", len(routes))
         return self._build_result(_t.time() - start)
-
