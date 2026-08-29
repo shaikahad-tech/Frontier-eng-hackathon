@@ -1,136 +1,122 @@
-# Video Script — RepoAssess (≤5 minutes)
+# Video Script — RepoAssess Demo
 
-## Overview
-
-This script walks through the RepoAssess project: the problem, the baseline, the
-advanced multi-agent solution, the evaluation results, and the key insights.
-
-Target duration: 4 minutes 30 seconds.
+## Target duration: 4-5 minutes
 
 ---
 
-## [0:00–0:30] Problem Statement
+### [0:00] Problem Statement (30s)
 
 **Narration:**
-"Imagine you're an engineering team evaluating a codebase for adoption or
-purchase. You look at the README — it looks fine. But is the code actually good?
-Are there tests? Is it maintainable? Is it secure? The README can't tell you.
+"Engineering teams need to assess code repositories for adoption, purchase, or integration. But a README reveals little about actual code quality. You need to understand the codebase: run tests, inspect architecture, check dependencies, assess security. Without a repeatable method, the assessment depends on incomplete judgment."
 
-RepoAssess solves this problem. It's a multi-agent system that analyzes a code
-repository across four dimensions — structure, testing, code quality, and
-maintenance — using 10 real code analysis tools, and produces an
-evidence-backed quality report."
-
-**Visual:** Show the README of a repo, then cut to the RepoAssess architecture diagram.
+**Screen:** Show a GitHub repo page with a nice README, then reveal that the code has no tests, security issues, and no CI.
 
 ---
 
-## [0:30–1:00] Baseline Solution
+### [0:30] Phase 1: Baseline vs Advanced (60s)
 
 **Narration:**
-"First, the baseline. This is the simplest approach — what someone might do
-with ChatGPT. Read the README, look at the file listing, and produce a score.
+"We built a multi-agent system called RepoAssess. The baseline solution reads only the README — like glancing at the repo page. The advanced solution uses 10 real code analysis tools across 4 specialist agents, with a verification agent that cross-checks findings."
 
-The baseline uses only two tools: read_readme and analyze_structure. It makes
-a single assessment call. No code analysis, no test execution, no git history."
+**Screen:** Run the evaluation
+```bash
+python -m src.generate_test_repos
+python -m src.evaluate
+```
 
-**Visual:** Show `src/baseline.py` — highlight the two tool calls and the single
-prompt approach. Show the output: score 5-6/10 for everything.
-
-**Key point:** The baseline gives everything a score around 5/10. It can't tell
-a platinum repo from a terrible one.
+**Highlight:** Show the evaluation output:
+- Baseline MAE: 1.92
+- Advanced MAE: 0.92
+- 52.2% improvement
+- 4.2x more findings
 
 ---
 
-## [1:00–2:30] Advanced Multi-Agent Solution
+### [1:30] Phase 1: Single Repo Demo (30s)
 
 **Narration:**
-"The advanced solution uses four specialist agents running in parallel, each
-focused on one dimension:
+"Let's see it in action on a single repository."
 
-1. **Structure Agent** — reads README, analyzes dependencies, checks for
-   Dockerfile, packaging config
-2. **Test Agent** — counts test files, runs the test suite with pytest, checks
-   for CI/CD configuration
-3. **Code Quality Agent** — analyzes cyclomatic complexity via AST, checks for
-   TODO/FIXME/HACK markers, docstring coverage, and security issues
-4. **Maintenance Agent** — analyzes git history, contributor count, recent
-   activity, release tags
+**Screen:**
+```bash
+python -m src.advanced test_repos/platinum_repo
+```
 
-Each agent calls real tools, gathers structured data, and produces findings
-with evidence citations."
-
-**Visual:** Show `src/advanced.py` — scroll through the agent functions.
-Highlight the concurrent.futures ThreadPoolExecutor for parallel execution.
-
-**Then show the verification agent:**
-"A verification agent cross-checks every finding against the raw tool data.
-If a finding can't be backed by evidence, it's flagged as unverified."
-
-**Visual:** Show the verification_agent function and a sample output with
-verified_count and flagged_count.
+Show the JSON output with dimension scores, findings, and recommendation.
 
 ---
 
-## [2:30–3:30] Evaluation Results
+### [2:00] Phase 2: Production-Grade Platform (90s)
 
 **Narration:**
-"We evaluated both solutions on 12 synthetic test repositories with known
-quality scores — from a platinum repo with tests, docs, and low complexity
-to a minimal empty project."
+"Phase 2 upgrades RepoAssess to a production-grade engineering intelligence platform with 12 analyzers covering 10 scoring dimensions. It adds hard gates that cap scores when critical issues are found, letter grades from A+ to F, maturity levels from 0 to 5, and three report formats."
 
-**Visual:** Show the evaluation report table:
+**Screen:**
+```bash
+python -m src.phase2.pipeline test_repos/platinum_repo
+```
 
-| Metric | Baseline | Advanced | Improvement |
-|---|---|---|---|
-| Score accuracy (MAE) | 1.92 | 0.92 | 52.2% better |
-| Ranking accuracy | 69.7% | 86.4% | +16.7pp |
-| Total findings | 42 | 175 | 4.2x more |
-| Recommendation accuracy | 50.0% | 83.3% | +33.3pp |
+Show the output:
+- Overall score with grade (e.g., 63/100, C+, Level 2)
+- Hard gates triggered (if any)
+- Category scores across 10 dimensions
+- Findings count by severity
 
-**Narration:**
-"The advanced solution improved score accuracy by 52%, produced 4 times more
-specific findings, and correctly recommended adopt/investigate/avoid 83% of
-the time versus 50% for the baseline.
+Then show the generated reports:
+```bash
+cat phase2_output/executive_report.md
+```
 
-5 out of 12 repos were scored with zero error."
+Show the executive report with top risks, strengths, and category scores table.
 
-**Visual:** Show `evaluation/report.md` and the per-repo comparison table.
+```bash
+cat phase2_output/engineering_report.md | head -50
+```
+
+Show the engineering report with detailed findings, CWE/OWASP mappings, and evidence.
 
 ---
 
-## [3:30–4:15] Agent Trajectories
+### [3:30] Phase 2: CI/CD Integration (30s)
 
 **Narration:**
-"Every agent run produces a structured JSON trajectory that captures each
-tool call, the agent's reasoning, and the final result. These are the agent
-trajectories required by the hackathon."
+"Phase 2 is designed for CI/CD integration. Quality gates with deterministic exit codes let you block deployments on critical issues."
 
-**Visual:** Show a trajectory JSON file — highlight the steps array with
-tool_call entries showing tool name, inputs, and outputs.
+**Screen:**
+```bash
+python -m src.phase2.gates phase2_output/machine_report.json --min-score 70 --no-critical
+```
+
+Show the gate check output and exit code.
 
 ---
 
-## [4:15–4:30] Hot Take and Conclusion
+### [4:00] Comparison and Results (60s)
 
 **Narration:**
-"The biggest lesson from this project: scoring calibration mattered more
-than the agent architecture. Adding agents and tools increased finding
-specificity 4x, but it was the scoring recalibration — starting from a
-lower base and requiring evidence of quality rather than penalizing its
-absence — that actually improved accuracy by 52%.
+"Here's the comparison. Phase 1 achieved 52.2% MAE improvement over the baseline. Phase 2 adds 10 scoring dimensions, 5 hard gates, structured findings with CWE/OWASP mappings, 3 report formats, CI exit codes, and runs 19x faster — making it suitable for production CI/CD pipelines."
 
-Invest in calibration and verification before complexity. A well-calibrated
-simple system you trust is worth more than a complex system you don't."
-
-**Visual:** Show the repo URL: github.com/shaikahad-tech/Frontier-eng-hackathon
+**Screen:** Show the comparison table:
+- Baseline MAE: 19.2, Phase 1: 9.2, Phase 2: 15.2
+- Phase 2 produces 61 structured findings with hard gates
+- Phase 2 runs in 0.14s per repo
 
 ---
 
-## Recording tips
+### [4:30] Conclusion (30s)
 
-- Use a screen recording at 1920x1080
-- Show the code in a dark theme editor (VS Code)
-- Use the terminal for running commands
-- Keep the camera off, narrate over the screen
-- Total duration: ~4:30 (well under the 5-minute limit)
+**Narration:**
+"RepoAssess demonstrates how a multi-agent system with real code analysis tools can produce evidence-backed repository quality assessments. Phase 2 takes it to production with hard gates, CI integration, and structured reporting. The solution is fully deterministic, requires no API keys, and runs in under 200ms per repo."
+
+**Screen:** Show the GitHub repo URL and the test results (65 tests passing).
+
+---
+
+## Key points to emphasize
+
+1. **Evidence over assumptions**: Every finding has file/line references, evidence, and confidence
+2. **Hard gates**: Critical security issues cap the score at 59 regardless of other dimensions
+3. **Structured output**: Findings have id, severity, confidence, CWE/OWASP mappings
+4. **Speed**: Phase 2 runs in 0.14s per repo — 19x faster than Phase 1
+5. **Deterministic**: No API keys, fully reproducible, no LLM hallucination risk
+6. **CI-ready**: Exit codes for quality gate integration
