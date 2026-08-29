@@ -39,7 +39,6 @@ class ReleaseVersioningAnalyzer(AnalyzerBase):
         import time as _t; start = _t.time()
         package_version = None; git_tags = []; changelog_consistent = False
 
-        # Check package version
         for vfile in ["setup.py", "pyproject.toml", "package.json", "Cargo.toml"]:
             path = os.path.join(repo_path, vfile)
             if os.path.exists(path):
@@ -49,20 +48,17 @@ class ReleaseVersioningAnalyzer(AnalyzerBase):
                     package_version = m.group(1)
                     break
 
-        # Check git tags
         try:
             result = subprocess.run(["git", "tag", "--list"], cwd=repo_path, capture_output=True, text=True, timeout=5)
             git_tags = [t.strip() for t in result.stdout.splitlines() if t.strip()]
         except:
             pass
 
-        # Check changelog
         for cl in ["CHANGELOG.md", "CHANGES.md", "CHANGELOG.rst"]:
             if os.path.exists(os.path.join(repo_path, cl)):
                 changelog_consistent = True
 
         if package_version and git_tags:
-            # Check if version matches latest tag
             latest_tag = git_tags[-1] if git_tags else None
             if latest_tag and package_version not in latest_tag and latest_tag.lstrip("v") not in package_version:
                 self._add_finding(Finding(id="REL-001", category="cicd", severity=Severity.MEDIUM.value,
@@ -99,7 +95,6 @@ class StaticCodeQualityAnalyzer(AnalyzerBase):
         import time as _t; start = _t.time()
         configured_linters = []; has_type_checker = False
 
-        # Check for linter configs
         config_checks = {
             "ruff": ["ruff.toml", ".ruff.toml", "[tool.ruff]"],
             "flake8": [".flake8", "[flake8]", "setup.cfg"],
@@ -111,11 +106,9 @@ class StaticCodeQualityAnalyzer(AnalyzerBase):
 
         for linter, configs in config_checks.items():
             for cfg in configs:
-                # Check for file existence
                 if os.path.exists(os.path.join(repo_path, cfg)):
                     configured_linters.append(linter)
                     break
-                # Check in pyproject.toml or setup.cfg
                 for toml in ["pyproject.toml", "setup.cfg"]:
                     path = os.path.join(repo_path, toml)
                     if os.path.exists(path):
@@ -126,7 +119,6 @@ class StaticCodeQualityAnalyzer(AnalyzerBase):
         if "mypy" in configured_linters or "pyright" in configured_linters:
             has_type_checker = True
 
-        # Try running ruff if available
         ruff_errors = 0
         try:
             result = subprocess.run(["ruff", "check", "--output-format=json", "."],
@@ -183,7 +175,6 @@ class PerformanceAnalyzer(AnalyzerBase):
             except SyntaxError: continue
 
             for node in ast.walk(tree):
-                # N+1 query pattern: loop + DB call
                 if isinstance(node, ast.For):
                     for child in ast.walk(node):
                         if isinstance(child, ast.Call):
@@ -199,10 +190,9 @@ class PerformanceAnalyzer(AnalyzerBase):
                                         recommendation="Use batch queries or ORM prefetching."))
                                 break
 
-            # Check for list construction in loops
             for i, line in enumerate(content.splitlines(), 1):
                 if "list(" in line and "for " in line:
-                    pass  # list comprehension is fine
+                    pass
                 elif re.search(r'\.append\(.*\)', line) and i > 1:
                     prev = content.splitlines()[i-2].strip() if i > 1 else ""
                     if "for " in prev and "append" in line:
@@ -247,7 +237,6 @@ class SecretsDetectionAnalyzer(AnalyzerBase):
             if fname.endswith((".pyc", ".pyo", ".so", ".bin")): continue
             content = _safe_read(filepath)
             rel = os.path.relpath(filepath, repo_path)
-            # Skip .env.example and test files
             if "example" in fname.lower() or os.path.basename(root) in ("tests", "test"): continue
 
             for i, line in enumerate(content.splitlines(), 1):
@@ -257,16 +246,13 @@ class SecretsDetectionAnalyzer(AnalyzerBase):
                 for pattern, secret_type in self.SECRET_PATTERNS:
                     m = re.search(pattern, stripped)
                     if m:
-                        # Mask the secret
                         full_match = m.group(0)
                         masked = re.sub(m.group(1) if m.lastindex else full_match,
                                        '***MASKED***', full_match) if m.lastindex else full_match[:20] + "***MASKED***"
-                        # Check if it's a placeholder
                         value = m.group(1) if m.lastindex else ""
                         if value.lower() in ("your_key_here", "changeme", "placeholder", "xxx", "example"):
                             continue
 
-                        # Entropy check for high confidence
                         import math
                         entropy = 0
                         if value:
@@ -376,7 +362,6 @@ class BuildPackagingAnalyzer(AnalyzerBase):
                 status=Status.WARN.value, title="No build configuration detected", confidence=0.7,
                 recommendation="Add a build configuration file."))
 
-        # Check for .gitignore
         if not os.path.exists(os.path.join(repo_path, ".gitignore")):
             self._add_finding(Finding(id="BUILD-002", category="reproducibility", severity=Severity.LOW.value,
                 status=Status.WARN.value, title="No .gitignore file", confidence=0.8,
@@ -404,7 +389,6 @@ class CoverageAnalyzer(AnalyzerBase):
         import time as _t; start = _t.time()
         coverage_pct = None; has_coverage_config = False; has_coverage_report = False
 
-        # Check for coverage configuration
         for cfg in [".coveragerc", "pyproject.toml", "setup.cfg", "pytest.ini"]:
             path = os.path.join(repo_path, cfg)
             if os.path.exists(path):
@@ -413,13 +397,11 @@ class CoverageAnalyzer(AnalyzerBase):
                     has_coverage_config = True
                     break
 
-        # Check for coverage reports
         for report in ["coverage.xml", ".coverage", "htmlcov", "coverage"]:
             if os.path.exists(os.path.join(repo_path, report)):
                 has_coverage_report = True
                 break
 
-        # Try running coverage
         try:
             result = subprocess.run(
                 ["python", "-m", "pytest", "--cov", "--cov-report=json", "-q", "--no-header", "--tb=no"],
@@ -468,14 +450,12 @@ class VulnerabilityAnalyzer(AnalyzerBase):
         import time as _t; start = _t.time()
         known_vulns = []; risky_deps = []
 
-        # Check for dependency files and look for known vulnerable patterns
         req_path = os.path.join(repo_path, "requirements.txt")
         if os.path.exists(req_path):
             content = _safe_read(req_path)
             for i, line in enumerate(content.splitlines(), 1):
                 stripped = line.strip()
                 if stripped.startswith("#") or not stripped: continue
-                # Check for known vulnerable versions (simplified)
                 if "Flask==0.12" in stripped or "Flask<1.0" in stripped:
                     known_vulns.append({"package": "Flask", "version": stripped, "issue": "Known XSS in old versions"})
                     self._add_finding(Finding(id="VULN-001", category="security", severity=Severity.HIGH.value,
@@ -491,13 +471,11 @@ class VulnerabilityAnalyzer(AnalyzerBase):
                         evidence=f"Line {i}: {stripped}", cwe_id="CWE-1104",
                         recommendation="Upgrade to latest Django."))
 
-        # Check for unpinned dependencies as risky
         if os.path.exists(req_path):
             content = _safe_read(req_path)
             for i, line in enumerate(content.splitlines(), 1):
                 stripped = line.strip()
                 if stripped.startswith("#") or not stripped: continue
-                # Check for unpinned (no version specifier)
                 if "==" not in stripped and ">=" not in stripped and "<" not in stripped:
                     pkg = stripped.split("[")[0].split(";")[0].strip()
                     if pkg:
@@ -509,10 +487,9 @@ class VulnerabilityAnalyzer(AnalyzerBase):
                                 evidence=f"Line {i}: {stripped} (no version pin)",
                                 recommendation="Pin dependencies to specific versions."))
 
-        # Check for GitHub security advisories
         dep_review_path = os.path.join(repo_path, ".github", "dependabot.yml")
         if not os.path.exists(dep_review_path):
-            if os.path.exists(os.path.join(repo_path, "requirements.txt")) or                os.path.exists(os.path.join(repo_path, "package.json")):
+            if os.path.exists(os.path.join(repo_path, "requirements.txt")) or os.path.exists(os.path.join(repo_path, "package.json")):
                 self._add_finding(Finding(id="VULN-004", category="security", severity=Severity.LOW.value,
                     status=Status.INFO.value, title="No Dependabot configuration detected",
                     confidence=0.7, recommendation="Enable Dependabot for automated vulnerability alerts."))
