@@ -84,7 +84,7 @@ class ScoringEngine:
                 ),
                 max_score=59,
                 affected_category="overall",
-                message="Critical security issue detected — overall score capped at 59.",
+                message="Critical security issue detected - overall score capped at 59.",
             ),
             HardGate(
                 gate_id="GATE-SECRET",
@@ -95,7 +95,7 @@ class ScoringEngine:
                 ),
                 max_score=30,
                 affected_category="security",
-                message="Confirmed active secret committed — security score capped at 30.",
+                message="Confirmed active secret committed - security score capped at 30.",
             ),
             HardGate(
                 gate_id="GATE-NO-TESTS",
@@ -105,7 +105,7 @@ class ScoringEngine:
                 ),
                 max_score=39,
                 affected_category="testing",
-                message="No tests found — testing score capped at 39.",
+                message="No tests found - testing score capped at 39.",
             ),
             HardGate(
                 gate_id="GATE-NO-CI",
@@ -115,7 +115,7 @@ class ScoringEngine:
                 ),
                 max_score=39,
                 affected_category="cicd",
-                message="No CI/CD pipeline — CI/CD score capped at 39.",
+                message="No CI/CD pipeline - CI/CD score capped at 39.",
             ),
             HardGate(
                 gate_id="GATE-NO-LOCKFILE",
@@ -125,29 +125,15 @@ class ScoringEngine:
                 ),
                 max_score=39,
                 affected_category="reproducibility",
-                message="No lockfile — reproducibility score capped at 39.",
+                message="No lockfile - reproducibility score capped at 39.",
             ),
         ]
 
     def score(self, tool_results: list, findings: list) -> dict:
-        """
-        Calculate the final score from all tool results.
-
-        Returns a dict with:
-        - overall_score (0-100)
-        - grade (A+ through F)
-        - maturity_level (0-5)
-        - category_scores (dict of category -> score)
-        - hard_gates_triggered (list of triggered gates)
-        - dedup_findings_count
-        """
-        # Deduplicate findings
+        """Calculate the final score from all tool results."""
         deduped = self._deduplicate_findings(findings)
-
-        # Extract category scores from tool results
         category_scores = self._extract_category_scores(tool_results)
 
-        # Apply hard gates
         triggered_gates = []
         for gate in self.hard_gates:
             if gate.check(deduped, tool_results):
@@ -159,27 +145,30 @@ class ScoringEngine:
                     "message": gate.message,
                 })
                 if gate.affected_category == "overall":
-                    pass  # Will cap overall after weighted calculation
+                    pass
                 else:
                     category_scores[gate.affected_category] = min(
                         category_scores.get(gate.affected_category, 0),
                         gate.max_score,
                     )
 
-        # Calculate weighted overall score
         overall = 0
         for category, weight in self.weights.items():
-            score = category_scores.get(category, 50)
+            score = category_scores.get(category, 35)
             overall += score * weight
 
         overall = int(round(overall))
 
-        # Apply overall hard gates
         for gate in triggered_gates:
             if gate["affected_category"] == "overall":
                 overall = min(overall, gate["max_score"])
 
-        # Determine grade and maturity
+        critical_count = sum(1 for f in deduped if f.severity == Severity.CRITICAL.value)
+        high_count = sum(1 for f in deduped if f.severity == Severity.HIGH.value)
+        medium_count = sum(1 for f in deduped if f.severity == Severity.MEDIUM.value)
+        overall -= min(30, critical_count * 12 + high_count * 6 + medium_count * 2)
+        overall = max(0, overall)
+
         grade = grade_from_score(overall)
         maturity = maturity_from_score(overall)
 
@@ -193,9 +182,9 @@ class ScoringEngine:
             "weights": self.weights,
             "total_findings": len(deduped),
             "dedup_removed": len(findings) - len(deduped),
-            "critical_count": sum(1 for f in deduped if f.severity == Severity.CRITICAL.value),
-            "high_count": sum(1 for f in deduped if f.severity == Severity.HIGH.value),
-            "medium_count": sum(1 for f in deduped if f.severity == Severity.MEDIUM.value),
+            "critical_count": critical_count,
+            "high_count": high_count,
+            "medium_count": medium_count,
             "low_count": sum(1 for f in deduped if f.severity == Severity.LOW.value),
         }
 
@@ -205,48 +194,34 @@ class ScoringEngine:
         for result in tool_results:
             if not isinstance(result, dict):
                 continue
-            tool_name = result.get("tool_name", "")
-            # Map tool metrics to categories
             metrics = result.get("metrics", {})
             for key, value in metrics.items():
                 if key.endswith("_score") and isinstance(value, (int, float)):
                     category = key.replace("_score", "")
-                    # Map analyzer-specific categories to scoring categories
                     category_mapping = {
-                        "architecture": "architecture",
-                        "testing": "testing",
-                        "documentation": "documentation",
-                        "security": "security",
-                        "sast": "security",
-                        "maintainability": "maintainability",
-                        "complexity": "maintainability",
-                        "dependencies": "dependencies",
-                        "dependency": "dependencies",
-                        "git": "cicd",
-                        "cicd": "cicd",
-                        "container": "security",
-                        "reliability": "reliability",
-                        "reproducibility": "reproducibility",
-                        "tech_debt": "maintainability",
+                        "architecture": "architecture", "testing": "testing",
+                        "documentation": "documentation", "security": "security",
+                        "sast": "security", "maintainability": "maintainability",
+                        "complexity": "maintainability", "dependencies": "dependencies",
+                        "dependency": "dependencies", "git": "cicd", "cicd": "cicd",
+                        "container": "security", "reliability": "reliability",
+                        "reproducibility": "reproducibility", "tech_debt": "maintainability",
                     }
                     mapped = category_mapping.get(category, category)
                     if mapped not in category_scores or value > category_scores[mapped]:
                         category_scores[mapped] = max(0, min(100, int(value)))
 
-        # Fill missing categories with default
         for cat in self.weights:
             if cat not in category_scores:
-                category_scores[cat] = 50  # Neutral default
+                category_scores[cat] = 35
 
-        # Merge security scores (SAST + container + secrets)
         security_scores = []
         for key in ["security", "sast", "container"]:
             if key in category_scores:
                 security_scores.append(category_scores.pop(key))
         if security_scores:
-            category_scores["security"] = min(security_scores)  # Worst-case for security
+            category_scores["security"] = min(security_scores)
 
-        # Merge maintainability scores (complexity + tech_debt)
         maint_scores = []
         for key in ["maintainability", "complexity", "tech_debt"]:
             if key in category_scores:
@@ -261,7 +236,6 @@ class ScoringEngine:
         seen = set()
         deduped = []
         for f in findings:
-            # Create a dedup key
             files_key = tuple(sorted(tuple(ff.get("path", "")) for ff in f.files)) if f.files else ()
             key = (f.category, f.title, files_key)
             if key not in seen:
