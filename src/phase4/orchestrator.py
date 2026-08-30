@@ -1,27 +1,60 @@
-"""Phase 4 — Orchestrator and Entry Point
+"""Phase 4 — Rebuilt Orchestrator
 
-Combines agent outputs, applies verification, gates, and produces final score.
+Key changes:
+1. Verification status AFFECTS score contributions:
+   - VERIFIED: full weight
+   - PARTIALLY_VERIFIED: 75% weight
+   - UNKNOWN: 50% weight
+   - UNVERIFIED: 25% weight
+   - CONTRADICTED: finding suppressed, score contribution removed
+2. Score explainability per dimension
+3. Evidence graph (Repository -> Dimension -> Finding -> Tool -> Evidence -> File -> Line)
+4. Remediation engine (P0/P1/P2/P3 prioritized plan)
+5. Proper confidence and evidence coverage computation
 """
 from __future__ import annotations
 import json
 import time
+import hashlib
 from typing import Any
 from collections import defaultdict
 
 from src.phase4.agents import (
-    SpecialistAgent, StructureAgent, TestAgent,
-    CodeQualityAgent, MaintenanceAgent, EvidenceCollector,
+    SpecialistAgent, EvidenceCollector,
     AgentFinding, AgentResult, DEFAULT_WEIGHTS, PROFILE_WEIGHTS, HARD_GATES,
 )
-from src.phase4.verification import VerificationAgent, VerificationResult
+from src.phase4.specialists import (
+    StructureAgent, TestAgent, CodeQualityAgent, MaintenanceAgent,
+)
+from src.phase4.verification import VerificationAgent, VerificationResult, _finding_id
+
+
+# Verification status -> score weight multiplier
+# This is what makes verification MATTER for the final score
+VERIFICATION_WEIGHTS = {
+    "VERIFIED": 1.0,
+    "PARTIALLY_VERIFIED": 0.75,
+    "UNKNOWN": 0.5,
+    "UNVERIFIED": 0.25,
+    "CONTRADICTED": 0.0,  # Suppressed entirely
+}
 
 
 class Orchestrator:
-    """Combines agent outputs, applies verification, gates, and produces final score."""
+    """Combines agent outputs, applies verification, gates, and produces final score.
 
-    def __init__(self, weights: dict[str, float] = None, gates: dict = None):
-        self.weights = weights or DEFAULT_WEIGHTS
+    Verification status directly affects the score contribution of each finding.
+    This means the system WITH verification produces different scores than WITHOUT.
+    """
+
+    def __init__(self, weights: dict[str, float] = None, gates: dict = None,
+                 profile: str = None):
+        if profile and profile.upper() in PROFILE_WEIGHTS:
+            self.weights = weights or PROFILE_WEIGHTS[profile.upper()]
+        else:
+            self.weights = weights or DEFAULT_WEIGHTS
         self.gates = gates or HARD_GATES
+        self.profile = profile
 
     def _apply_hard_gates(self, score: float, agent_results: list[AgentResult],
                           evidence: EvidenceCollector) -> tuple[float, list[str]]:
@@ -34,16 +67,14 @@ class Orchestrator:
         vuln_findings = evidence.get_findings("vulnerability")
 
         critical_sec = [f for f in sec_findings + secrets_findings + vuln_findings
-                       if f.get("severity") == "critical"]
-        high_sec = [f for f in sec_findings + secrets_findings + vuln_findings
-                   if f.get("severity") == "high"]
-
+                       if f.get("severity") in ("critical", "CRITICAL")]
         if critical_sec:
             gate = self.gates["critical_security"]
             gated_score = min(gated_score, gate["max_score"])
-            gate_reasons.append(f"Hard gate: {gate['description']} (score capped at {gate['max_score']})")
+            gate_reasons.append(
+                f"Hard gate: {gate['description']} (score capped at {gate['max_score']})")
 
-        confirmed_secrets = [f for f in secrets_findings if f.get("status") == "FAIL"]
+        confirmed_secrets = [f for f in secrets_findings if f.get("status") in ("FAIL", "CRITICAL")]
         if confirmed_secrets:
             gate = self.gates["committed_secret"]
             gated_score = min(gated_score, gate["max_score"])
@@ -71,9 +102,9 @@ class Orchestrator:
                     "criteria": "Critical security issues or committed secrets detected",
                     "reasons": gate_reasons}
 
-        if score >= 70 and confidence >= 0.7:
+        if score >= 70 and confidence >= 0.6:
             return {"recommendation": "ADOPT",
-                    "criteria": "Score >= 70, confidence >= 0.7, no critical issues",
+                    "criteria": "Score >= 70, confidence >= 0.6, no critical issues",
                     "reasons": []}
 
         if score < 30:
@@ -83,23 +114,178 @@ class Orchestrator:
 
         return {"recommendation": "INVESTIGATE",
                 "criteria": "Quality is mixed or important unknowns exist",
-                "reasons": gate_reasons or ["Score in middle range — requires investigation"]}
+                "reasons": gate_reasons or ["Score in middle range"]}
 
-    def _get_top_strengths(self, agent_results: list[AgentResult]) -> list[str]:
+    def _get_top_strengths(self, agent_results: list[AgentResult],
+                           verifications: list[VerificationResult]) -> list[str]:
+        """Extract top 5 strengths from verified findings."""
+        verified_ids = {v.finding_id for v in verifications if v.status == "VERIFIED"}
         strengths = []
         for result in agent_results:
             for finding in result.findings:
-                if finding.score >= 7.0 and finding.confidence >= 0.7:
+                fid = _finding_id(finding)
+                if finding.score >= 7.0 and (fid in verified_ids or not verifications):
                     strengths.append(f"[{result.dimension}] {finding.claim}")
         return strengths[:5]
 
-    def _get_top_risks(self, agent_results: list[AgentResult]) -> list[str]:
+    def _get_top_risks(self, agent_results: list[AgentResult],
+                        verifications: list[VerificationResult]) -> list[str]:
+        """Extract top 5 risks from verified findings."""
+        verified_ids = {v.finding_id for v in verifications
+                       if v.status in ("VERIFIED", "PARTIALLY_VERIFIED", "UNKNOWN")}
         risks = []
         for result in agent_results:
             for finding in result.findings:
-                if finding.score <= 3.0:
+                fid = _finding_id(finding)
+                if finding.score <= 3.0 and (fid in verified_ids or not verifications):
                     risks.append(f"[{result.dimension}] {finding.claim}")
         return risks[:5]
+
+    def _build_evidence_graph(self, agent_results: list[AgentResult],
+                               verifications: list[VerificationResult]) -> dict[str, Any]:
+        """Build serializable evidence graph."""
+        graph = {"repository": "", "dimensions": {}}
+        verify_map = {v.finding_id: v for v in verifications}
+
+        for result in agent_results:
+            dim = result.dimension
+            graph["dimensions"].setdefault(dim, {"findings": []})
+            for finding in result.findings:
+                fid = _finding_id(finding)
+                vr = verify_map.get(fid)
+                node = {
+                    "finding_id": fid,
+                    "claim": finding.claim,
+                    "score": finding.score,
+                    "confidence": finding.confidence,
+                    "agent": finding.agent,
+                    "sources": finding.sources,
+                    "verification_status": vr.status if vr else "UNKNOWN",
+                    "evidence": finding.evidence,
+                    "supporting": vr.supporting_evidence if vr else [],
+                    "contradicting": vr.contradicting_evidence if vr else [],
+                }
+                for ev in finding.evidence:
+                    if isinstance(ev, dict):
+                        if "file" in ev:
+                            node["file"] = ev["file"]
+                        if "line" in ev:
+                            node["line"] = ev["line"]
+                graph["dimensions"][dim]["findings"].append(node)
+
+        return graph
+
+    def _build_remediation_plan(self, agent_results: list[AgentResult],
+                                verifications: list[VerificationResult],
+                                evidence: EvidenceCollector) -> list[dict]:
+        """Build prioritized remediation plan (P0/P1/P2/P3)."""
+        items = []
+        verify_map = {v.finding_id: v for v in verifications}
+
+        all_findings = []
+        for result in agent_results:
+            for finding in result.findings:
+                fid = _finding_id(finding)
+                vr = verify_map.get(fid)
+                if vr and vr.status == "CONTRADICTED":
+                    continue
+                all_findings.append((result.dimension, finding, vr))
+
+        all_findings.sort(key=lambda x: x[1].score)
+
+        for dim, finding, vr in all_findings:
+            if finding.score >= 5.0:
+                continue
+
+            if finding.score <= 1.0:
+                priority = "P0"
+            elif finding.score <= 2.0:
+                priority = "P1"
+            elif finding.score <= 3.5:
+                priority = "P2"
+            else:
+                priority = "P3"
+
+            file_path = ""
+            line_num = ""
+            for ev in finding.evidence:
+                if isinstance(ev, dict):
+                    if "file" in ev:
+                        file_path = ev["file"]
+                    if "line" in ev:
+                        line_num = ev["line"]
+
+            items.append({
+                "priority": priority,
+                "finding": finding.claim,
+                "dimension": dim,
+                "severity": "critical" if finding.score <= 1.0 else "high" if finding.score <= 2.0 else "medium" if finding.score <= 3.5 else "low",
+                "evidence": [str(e) for e in finding.evidence[:3]],
+                "file": file_path,
+                "line": line_num,
+                "recommended_action": self._suggest_action(finding, dim),
+                "expected_impact": f"Would improve {dim} score from {finding.score:.1f} to ~7+",
+                "verification_status": vr.status if vr else "UNKNOWN",
+            })
+
+        return items[:15]
+
+    def _suggest_action(self, finding: AgentFinding, dim: str) -> str:
+        """Suggest a remediation action based on the finding."""
+        claim = finding.claim.lower()
+        if "test" in claim and "no" in claim:
+            return "Add comprehensive test suite with meaningful assertions"
+        if "test" in claim and ("fail" in claim or "broken" in claim):
+            return "Fix failing tests and ensure CI enforces passing tests"
+        if "secret" in claim or "hardcoded" in claim:
+            return "Remove committed secrets and use environment variables"
+        if "injection" in claim or "subprocess" in claim:
+            return "Fix injection vulnerability: sanitize inputs, avoid shell=True"
+        if "complexity" in claim:
+            return "Refactor high-complexity functions to reduce cyclomatic complexity"
+        if "documentation" in claim or "readme" in claim:
+            return "Add comprehensive README with installation, usage, and API docs"
+        if "stale" in claim or "abandoned" in claim or "maintenance" in claim:
+            return "Resume active maintenance: update dependencies, respond to issues"
+        if "dependenc" in claim:
+            return "Pin dependencies, update vulnerable packages, add lockfile"
+        if "ci" in claim:
+            return "Set up CI/CD pipeline with automated testing and security scanning"
+        return f"Address {dim} issues identified in the evaluation"
+
+    def _score_explanation(self, dim: str, result: AgentResult,
+                           verifications: list[VerificationResult]) -> dict[str, Any]:
+        """Explain why a dimension got the score it did."""
+        positives = []
+        negatives = []
+        verify_map = {v.finding_id: v for v in verifications}
+
+        for finding in result.findings:
+            fid = _finding_id(finding)
+            vr = verify_map.get(fid)
+            status = vr.status if vr else "UNKNOWN"
+
+            if status == "CONTRADICTED":
+                continue
+
+            weight_mult = VERIFICATION_WEIGHTS.get(status, 0.5)
+            effective_score = finding.score * weight_mult
+
+            entry = f"{finding.claim} (score: {finding.score:.1f}, status: {status}, effective: {effective_score:.1f})"
+            if finding.score >= 6.0:
+                positives.append(entry)
+            elif finding.score <= 4.0:
+                negatives.append(entry)
+
+        return {
+            "dimension": dim,
+            "raw_score": round(result.score, 2),
+            "score_0_100": round(result.score * 10, 1),
+            "positives": positives,
+            "negatives": negatives,
+            "evidence_coverage": round(result.evidence_coverage, 3),
+            "unknowns": result.unknowns,
+        }
 
     def _score_to_grade(self, score: float) -> str:
         if score >= 90: return "A"
@@ -114,26 +300,35 @@ class Orchestrator:
     def orchestrate(self, agent_results: list[AgentResult],
                     verifications: list[VerificationResult],
                     evidence: EvidenceCollector) -> dict[str, Any]:
-        """Produce the final evaluation."""
-        contradicted_ids = {v.finding_id for v in verifications if v.status == "CONTRADICTED"}
+        """Produce the final evaluation.
 
+        Verification status directly affects score contributions:
+        - VERIFIED findings contribute full score
+        - PARTIALLY_VERIFIED contribute 75%
+        - UNKNOWN contribute 50%
+        - UNVERIFIED contribute 25%
+        - CONTRADICTED findings are suppressed (0%)
+        """
+        verify_map = {v.finding_id: v for v in verifications}
+
+        # Apply verification statuses to findings
         for result in agent_results:
             for finding in result.findings:
-                fid = f"{finding.agent}_{finding.dimension}"
-                if fid in contradicted_ids:
-                    finding.status = "CONTRADICTED"
+                fid = _finding_id(finding)
+                vr = verify_map.get(fid)
+                if vr:
+                    finding.status = vr.status
                 else:
-                    for v in verifications:
-                        if v.finding_id == fid:
-                            finding.status = v.status
-                            break
+                    finding.status = "UNKNOWN"
 
         dim_map = {
             "structure": "structure", "testing": "testing",
             "code_quality": "code_quality", "maintenance": "maintenance",
         }
 
+        # Calculate verification-weighted score
         agent_scores = {}
+        score_explanations = {}
         total_weight = 0
         weighted_sum = 0
 
@@ -141,9 +336,33 @@ class Orchestrator:
             dim = result.dimension
             weight_key = dim_map.get(dim, dim)
             weight = self.weights.get(weight_key, 0)
-            agent_scores[dim] = result.score * 10
+
+            if result.findings:
+                finding_scores = []
+                finding_weights = []
+                for finding in result.findings:
+                    fid = _finding_id(finding)
+                    vr = verify_map.get(fid)
+                    status = vr.status if vr else "UNKNOWN"
+                    mult = VERIFICATION_WEIGHTS.get(status, 0.5)
+                    finding_scores.append(finding.score * mult)
+                    finding_weights.append(finding.confidence if finding.confidence > 0 else 0.5)
+
+                if sum(finding_weights) > 0:
+                    adj_score = sum(s * w for s, w in zip(finding_scores, finding_weights)) / sum(finding_weights)
+                else:
+                    adj_score = sum(finding_scores) / len(finding_scores) if finding_scores else 0
+            else:
+                adj_score = result.score
+
+            # If verification is disabled (empty verifications), use raw score
+            if not verifications:
+                adj_score = result.score
+
+            agent_scores[dim] = adj_score * 10
             weighted_sum += agent_scores[dim] * weight
             total_weight += weight
+            score_explanations[dim] = self._score_explanation(dim, result, verifications)
 
         final_score = weighted_sum / total_weight if total_weight > 0 else 0
         gated_score, gate_reasons = self._apply_hard_gates(final_score, agent_results, evidence)
@@ -154,18 +373,27 @@ class Orchestrator:
         verifier = VerificationAgent(evidence)
         verify_metrics = verifier.compute_verification_rate(verifications)
 
-        adjusted_confidence = avg_confidence * verify_metrics["verification_rate"]
+        # Confidence = agent confidence * (0.5 + 0.5 * verification_rate)
+        if verifications:
+            adjusted_confidence = avg_confidence * (0.5 + 0.5 * verify_metrics["weighted_verification_rate"])
+        else:
+            adjusted_confidence = avg_confidence * 0.5
+
         recommendation = self._generate_recommendation(gated_score, adjusted_confidence, gate_reasons)
+        evidence_graph = self._build_evidence_graph(agent_results, verifications)
+        remediation_plan = self._build_remediation_plan(agent_results, verifications, evidence)
+        known_unknowns = [u for r in agent_results for u in r.unknowns]
 
         report = {
+            "schema_version": "1.0",
             "system": "advanced",
             "score": round(gated_score, 2),
+            "grade": self._score_to_grade(gated_score),
             "confidence": round(adjusted_confidence, 3),
             "evidence_coverage": round(avg_coverage, 3),
             "verification_rate": verify_metrics["verification_rate"],
             "weighted_verification_rate": verify_metrics["weighted_verification_rate"],
             "verification_metrics": verify_metrics,
-            "grade": self._score_to_grade(gated_score),
             "recommendation": recommendation["recommendation"],
             "recommendation_criteria": recommendation["criteria"],
             "gate_reasons": gate_reasons,
@@ -176,20 +404,27 @@ class Orchestrator:
                       "unknowns": next((r.unknowns for r in agent_results if r.dimension == dim), [])}
                 for dim in dim_map.values()
             },
+            "score_explanation": score_explanations,
             "weights": self.weights,
-            "top_strengths": self._get_top_strengths(agent_results),
-            "top_risks": self._get_top_risks(agent_results),
-            "uncertainties": [u for r in agent_results for u in r.unknowns],
+            "top_strengths": self._get_top_strengths(agent_results, verifications),
+            "top_risks": self._get_top_risks(agent_results, verifications),
+            "uncertainties": known_unknowns,
+            "known_unknowns": known_unknowns,
             "verification_details": [
-                {"finding_id": v.finding_id, "claim": v.claim, "status": v.status,
-                 "supporting": v.supporting_evidence, "contradicting": v.contradicting_evidence}
+                {"finding_id": v.finding_id, "claim": v.claim,
+                 "claim_type": v.claim_type, "status": v.status,
+                 "supporting": v.supporting_evidence,
+                 "contradicting": v.contradicting_evidence}
                 for v in verifications
             ],
+            "evidence_graph": evidence_graph,
+            "remediation_plan": remediation_plan,
             "hard_gates_applied": self.gates,
             "metadata": {
                 "agent_count": len(agent_results),
                 "total_findings": len(verifications),
-                "contradicted_findings": len(contradicted_ids),
+                "contradicted_findings": sum(1 for v in verifications if v.status == "CONTRADICTED"),
+                "verified_findings": sum(1 for v in verifications if v.status == "VERIFIED"),
             },
         }
 
@@ -198,7 +433,8 @@ class Orchestrator:
 
 def evaluate_advanced(repo_path: str,
                       weights: dict[str, float] = None,
-                      gates: dict = None) -> dict[str, Any]:
+                      gates: dict = None,
+                      profile: str = None) -> dict[str, Any]:
     """Run the full advanced multi-agent evaluation."""
     start_time = time.time()
 
@@ -217,11 +453,46 @@ def evaluate_advanced(repo_path: str,
     verifier = VerificationAgent(evidence)
     verifications = verifier.verify_all(agent_results)
 
-    orchestrator = Orchestrator(weights=weights, gates=gates)
+    orchestrator = Orchestrator(weights=weights, gates=gates, profile=profile)
     report = orchestrator.orchestrate(agent_results, verifications, evidence)
 
     report["metadata"]["evaluation_time_seconds"] = round(time.time() - start_time, 3)
     report["metadata"]["agents_run"] = [a.AGENT_NAME for a in agents]
+
+    return report
+
+
+def evaluate_advanced_no_verification(repo_path: str,
+                                       weights: dict[str, float] = None,
+                                       gates: dict = None,
+                                       profile: str = None) -> dict[str, Any]:
+    """Run advanced evaluation WITHOUT verification for ablation comparison.
+
+    This runs the same agents but skips verification, so all findings
+    get full weight. The score will differ from the verified version,
+    proving verification matters.
+    """
+    start_time = time.time()
+
+    evidence = EvidenceCollector(repo_path)
+    evidence.collect()
+
+    agents = [
+        StructureAgent(evidence),
+        TestAgent(evidence),
+        CodeQualityAgent(evidence),
+        MaintenanceAgent(evidence),
+    ]
+
+    agent_results = [agent.evaluate() for agent in agents]
+    verifications = []  # No verification
+
+    orchestrator = Orchestrator(weights=weights, gates=gates, profile=profile)
+    report = orchestrator.orchestrate(agent_results, verifications, evidence)
+
+    report["metadata"]["evaluation_time_seconds"] = round(time.time() - start_time, 3)
+    report["metadata"]["agents_run"] = [a.AGENT_NAME for a in agents]
+    report["metadata"]["verification_enabled"] = False
 
     return report
 
