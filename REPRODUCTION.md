@@ -1,154 +1,82 @@
 # Reproduction Guide
 
-This guide is written for someone starting from a clean environment. It walks through setup, running both Phase 1 and Phase 2, running the evaluation, and verifying results.
-
 ## Prerequisites
 
 - Python 3.12+
-- Git (for git history analysis tool)
-- pip (Python package installer)
+- Git
+- pytest
 
 ## Setup
 
 ```bash
-cd repo-assess
+git clone https://github.com/shaikahad-tech/Frontier-eng-hackathon.git
+cd Frontier-eng-hackathon
 pip install -r requirements.txt
 ```
 
-Dependencies:
-- `pytest` (for running test suites in analyzed repos and for the project's own tests)
-- All other tools use only the Python standard library
-
-No API keys are required. The solution is fully deterministic and reproducible.
-
-## Data required
-
-No external data is needed. The 12 test repositories are generated synthetically by `src/generate_test_repos.py`.
-
-## Generate test repositories
+## Run the Benchmark
 
 ```bash
-python -m src.generate_test_repos
+# Full benchmark suite (25 repos, 10 steps)
+python repoassess.py benchmark --output results.json
+
+# Or programmatically
+python -c "
+from src.phase5.benchmark import run_full_benchmark
+results = run_full_benchmark(verbose=True)
+print(f'Repos: {results[\"benchmark\"][\"repo_count\"]}')
+"
 ```
 
-This creates 12 test repositories in `test_repos/` with known quality characteristics.
-
-## Phase 1: Run the evaluation (baseline vs advanced)
+## Analyze a Repository
 
 ```bash
-python -m src.evaluate
+# Executive report
+python repoassess.py analyze /path/to/repo --format executive
+
+# Detailed engineering report
+python repoassess.py analyze /path/to/repo --format engineering
+
+# JSON output
+python repoassess.py analyze /path/to/repo --format json --output report.json
 ```
 
-Expected output:
-```
-Baseline MAE:  1.92
-Advanced MAE:  0.92
-Improvement:   1.0 (52.2%)
-```
-
-## Phase 1: Assess a single repo
+## Run Tests
 
 ```bash
-python -m src.advanced test_repos/platinum_repo
-python -m src.baseline test_repos/platinum_repo
+python -m pytest tests/test_comprehensive.py -v
 ```
 
-## Phase 2: Run the production-grade pipeline
+## Verify Verification Affects Scores
 
-```bash
-# Run the full Phase 2 analysis
-python -m src.phase2.pipeline test_repos/platinum_repo
+```python
+from src.phase4.orchestrator import evaluate_advanced, evaluate_advanced_no_verification
 
-# Save reports to a specific directory
-python -m src.phase2.pipeline test_repos/platinum_repo --output phase2_reports
+# With verification
+result_v = evaluate_advanced("/path/to/repo")
+print(f"With verification: {result_v['score']}")
 
-# Run sequentially (for debugging)
-python -m src.phase2.pipeline test_repos/platinum_repo --sequential
+# Without verification (ablation)
+result_nv = evaluate_advanced_no_verification("/path/to/repo")
+print(f"Without verification: {result_nv['score']}")
 
-# Quiet mode
-python -m src.phase2.pipeline test_repos/platinum_repo --quiet
+# The scores should differ
+print(f"Difference: {result_v['score'] - result_nv['score']}")
 ```
 
-Phase 2 produces three reports:
-- `phase2_output/executive_report.md` — executive summary with top risks and strengths
-- `phase2_output/engineering_report.md` — detailed findings with evidence, CWE/OWASP mappings
-- `phase2_output/machine_report.json` — strict JSON for downstream processing
+## Benchmark Structure
 
-## Phase 2: Quality gate check (CI/CD integration)
+1. 25 synthetic repos generated with known ground truth
+2. Baseline (Phase 3) and Advanced (Phase 4) evaluations
+3. Metrics: MAE, RMSE, Spearman, Pearson, Pairwise Accuracy
+4. Ablation: remove each component and measure impact
+5. Weight sensitivity: 4 different weight configurations
+6. Invariance: modify irrelevant properties, verify stable scores
+7. Causal sensitivity: add secrets/failing tests, verify score drops
+8. Mutation testing: inject mutations, measure detection rate
+9. Monotonicity: add quality features, verify score increases
+10. Counterfactual: remove components, verify score drops
 
-```bash
-# First generate the machine report
-python -m src.phase2.pipeline /path/to/repo --output reports
+## No External Dependencies
 
-# Then check quality gates
-python -m src.phase2.gates reports/machine_report.json --min-score 70 --no-critical
-
-# Exit codes: 0=pass, 1=gate failed, 2=analyzer error, 3=invalid config
-```
-
-## Phase 1 vs Phase 2 comparison
-
-To reproduce the comparison data from the README:
-
-```bash
-# Generate test repos
-python -m src.generate_test_repos
-
-# Run Phase 1 evaluation
-python -m src.evaluate
-
-# Run Phase 2 on each test repo
-for repo in test_repos/*/; do
-    python -m src.phase2.pipeline "$repo" --quiet --output "phase2_output/$(basename $repo)"
-done
-```
-
-## Run the test suite
-
-```bash
-pytest tests/ -v
-```
-
-Expected: 65 tests pass (45 Phase 1 + 20 Phase 2).
-
-## Agent trajectories
-
-Every Phase 1 agent run produces trajectory logs in `trajectories/`. Each trajectory contains:
-- Agent name and start time
-- Instructions received
-- Every tool call with inputs and outputs
-- Agent thoughts (reasoning)
-- Feedback and retries
-- Final result
-
-## Versions
-
-- Python: 3.12
-- pytest: 8.0+
-- Git: 2.39+
-- OS: Linux/macOS
-
-## Runtime and cost
-
-| Operation | Time | Cost |
-|---|---|---|
-| Generate test repos | ~5s | $0 |
-| Phase 1 full evaluation (12 repos) | ~30s | $0 |
-| Phase 2 single repo analysis | ~0.14s | $0 |
-| Phase 1 single repo (advanced) | ~2.6s | $0 |
-| Phase 1 single repo (baseline) | ~0.01s | $0 |
-
-## Verifying the main result
-
-```bash
-pip install -r requirements.txt
-python -m src.generate_test_repos
-python -m src.evaluate
-pytest tests/ -v
-```
-
-The evaluation output should show:
-- Baseline MAE: ~1.92
-- Advanced MAE: ~0.92
-- Improvement: ~52.2%
-- 65 tests passing
+The entire benchmark runs without any LLM API or external service. All analysis is deterministic and reproducible.
