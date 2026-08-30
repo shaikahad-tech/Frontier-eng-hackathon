@@ -2,12 +2,6 @@
 
 Each agent is scope-limited to specific analyzers and operates from actual
 Phase 2 tool output, not invented facts.
-
-Agents:
-  - StructureAgent: README, organization, packaging, Docker, architecture (weight: 20%)
-  - TestAgent: test presence, execution, coverage, CI enforcement (weight: 25%)
-  - CodeQualityAgent: complexity, static analysis, security, duplication, dead code, tech debt (weight: 25%)
-  - MaintenanceAgent: git history, activity, releases, reproducibility (weight: 15%)
 """
 from src.phase4.agents import (
     SpecialistAgent, AgentFinding, AgentResult, EvidenceCollector,
@@ -26,7 +20,6 @@ class StructureAgent(SpecialistAgent):
         profile = self._profile()
         discovery = self._get_context().get("discovery", {})
 
-        # ── Documentation quality ──
         doc_raw = self._get_raw_data("documentation")
         doc_score = self._get_metric("documentation", "documentation_score", 50)
 
@@ -48,7 +41,6 @@ class StructureAgent(SpecialistAgent):
         else:
             self._add_unknown("Documentation quality could not be determined")
 
-        # ── Project organization ──
         struct_raw = self._get_raw_data("structure")
         struct_score = self._get_metric("structure", "structure_score", 50)
         has_src = struct_raw.get("has_src_dir", False)
@@ -69,7 +61,6 @@ class StructureAgent(SpecialistAgent):
             self._add_finding("Poor project organization", score=3.0, confidence=0.7,
                             sources=["structure"])
 
-        # ── Packaging quality ──
         build_raw = self._get_raw_data("build_packaging")
         build_files = build_raw.get("build_files", [])
 
@@ -82,7 +73,6 @@ class StructureAgent(SpecialistAgent):
             self._add_finding("No build configuration detected", score=3.0, confidence=0.7,
                             sources=["build_packaging"])
 
-        # ── Deployment readiness ──
         container_raw = self._get_raw_data("container")
         has_dockerfile = container_raw.get("has_dockerfile", False)
         container_issues = container_raw.get("issues", 0)
@@ -99,7 +89,6 @@ class StructureAgent(SpecialistAgent):
         else:
             self._add_unknown("No container configuration to evaluate")
 
-        # ── Architecture signals ──
         api_raw = self._get_raw_data("api_analysis")
         route_count = api_raw.get("routes", 0)
 
@@ -134,8 +123,10 @@ class TestAgent(SpecialistAgent):
 
     def evaluate(self) -> AgentResult:
         testing_raw = self._get_raw_data("testing")
-        has_tests = testing_raw.get("has_tests", False)
-        test_count = testing_raw.get("test_count", 0)
+        test_file_count = testing_raw.get("test_file_count", 0)
+        test_function_count = testing_raw.get("test_function_count", 0)
+        has_tests = test_file_count > 0 or test_function_count > 0
+        test_count = test_function_count
         test_frameworks = testing_raw.get("frameworks", [])
 
         if not has_tests or test_count == 0:
