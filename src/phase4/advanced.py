@@ -20,4 +20,16 @@ from src.phase4.specialists import (
     StructureAgent, TestAgent, CodeQualityAgent, MaintenanceAgent,
 )
 from src.phase4.verification import VerificationAgent, VerificationResult
-from src.phase4.orchestrator import Orchestrator, evaluate_advanced, track_disagreements
+from src.phase4.orchestrator import (
+    Orchestrator, evaluate_advanced, evaluate_advanced_no_verification,
+    track_disagreements, VERIFICATION_WEIGHTS,
+)
+
+__all__ = [
+    "SpecialistAgent", "EvidenceCollector",
+    "AgentFinding", "AgentResult", "DEFAULT_WEIGHTS", "PROFILE_WEIGHTS", "HARD_GATES",
+    "StructureAgent", "TestAgent", "CodeQualityAgent", "MaintenanceAgent",
+    "VerificationAgent", "VerificationResult",
+    "Orchestrator", "evaluate_advanced", "evaluate_advanced_no_verification",
+    "track_disagreements", "VERIFICATION_WEIGHTS",
+]
