@@ -4,9 +4,10 @@ set -e
 
 echo "=== RepoAssess Setup ==="
 
-# 1. Apply repos.py patches (adds 25-repo support and fixes repo_01)
-echo "1. Patching repos.py..."
-python src/phase5/patch_repos.py || echo "  (patch already applied or repos.py already updated)"
+# 1. Apply patches
+echo "1. Applying patches..."
+python src/phase5/patch_repos.py || echo "  (repos patch already applied)"
+python src/phase4/patch_v2.py || echo "  (v2 patch already applied)"
 
 # 2. Verify imports
 echo "2. Verifying imports..."
@@ -33,7 +34,7 @@ from src.phase4.orchestrator import evaluate_advanced
 
 with tempfile.TemporaryDirectory() as repo:
     with open(os.path.join(repo, 'README.md'), 'w') as f:
-        f.write('# Test\n')
+        f.write('# Test\n## Install\n## Usage\n## Testing\n## License\n## Contributing\n## Examples\n')
     os.makedirs(os.path.join(repo, 'src'))
     with open(os.path.join(repo, 'src/app.py'), 'w') as f:
         f.write('def app(): return True\n')
