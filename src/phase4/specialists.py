@@ -222,7 +222,7 @@ class TestAgent(SpecialistAgent):
 class CodeQualityAgent(SpecialistAgent):
     AGENT_NAME = "code_quality_agent"
     DIMENSION = "code_quality"
-    ALLOWED_ANALYZERS = ["complexity", "static_quality", "security_sast", "secrets",
+    ALLOWED_ANALYZERS = ["complexity", "static_quality", "security", "secrets",
                          "dead_code", "duplication", "tech_debt", "performance",
                          "vulnerability", "error_handling"]
 
@@ -276,13 +276,13 @@ class CodeQualityAgent(SpecialistAgent):
         critical = [f for f in sec_findings + secrets_findings + vuln_findings if f.get("severity") in ("critical", "high", "CRITICAL", "HIGH")]
         if critical:
             self._add_finding(f"{len(critical)} critical/high security findings", score=0.5, confidence=0.95,
-                evidence=[{"type": "security_findings", "count": len(critical)}], sources=["security_sast", "secrets", "vulnerability"])
+                evidence=[{"type": "security_findings", "count": len(critical)}], sources=["security", "secrets", "vulnerability"])
             acc += 0.125
         elif sec_findings or vuln_findings:
-            self._add_finding("Minor security findings detected", score=5.5, confidence=0.8, sources=["security_sast", "vulnerability"])
+            self._add_finding("Minor security findings detected", score=5.5, confidence=0.8, sources=["security", "vulnerability"])
             acc += 1.375
         else:
-            self._add_finding("No security issues detected", score=8.5, confidence=0.75, sources=["security_sast"])
+            self._add_finding("No security issues detected", score=8.5, confidence=0.75, sources=["security"])
             acc += 2.125
 
         # Duplication (weight: 1)
@@ -325,6 +325,10 @@ class CodeQualityAgent(SpecialistAgent):
                 acc += 0.5
 
         dim_score = min(10.0, (acc / mx * 10.0) if mx > 0 else 3.0)
+        # If code is trivially simple (avg complexity <= 1.0), cap the overall quality score
+        # because dead_code/tech_debt/duplication scores are meaningless on empty code
+        if avg_complexity <= 1.0 and cx_score is not None and cx_score >= 80:
+            dim_score = min(dim_score, 4.0)
         dim_conf = sum(f.confidence for f in self.findings) / len(self.findings) if self.findings else 0.2
         return AgentResult(agent_name=self.AGENT_NAME, dimension=self.DIMENSION, score=round(dim_score, 2),
             confidence=round(dim_conf, 3), findings=self.findings,
@@ -347,7 +351,6 @@ class MaintenanceAgent(SpecialistAgent):
         commit_count = git_raw.get("total_commits", git_raw.get("commit_count", 0))
         contributor_count = git_raw.get("contributor_count", 0)
         if git_score is not None:
-            # Give credit for having git history at all, scale by commit count
             if git_score >= 70:
                 self._add_finding("Healthy Git maintenance history", score=8.0, confidence=0.85, sources=["git"])
                 acc += 2.4
