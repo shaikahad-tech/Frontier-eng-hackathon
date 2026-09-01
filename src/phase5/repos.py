@@ -784,6 +784,11 @@ from src.phase5.repos_adversarial import (
     generate_repo_06, generate_repo_08, generate_repo_09, generate_repo_10,
     generate_repo_11, generate_repo_14, generate_repo_15,
 )
+from src.phase5.repos_extended import (
+    generate_repo_16, generate_repo_17, generate_repo_18, generate_repo_19,
+    generate_repo_20, generate_repo_21, generate_repo_22, generate_repo_23,
+    generate_repo_24, generate_repo_25,
+)
 
 
 # Repository generators registry
@@ -793,6 +798,10 @@ REPO_GENERATORS = {
     "repo_07": generate_repo_07, "repo_08": generate_repo_08, "repo_09": generate_repo_09,
     "repo_10": generate_repo_10, "repo_11": generate_repo_11, "repo_12": generate_repo_12,
     "repo_13": generate_repo_13, "repo_14": generate_repo_14, "repo_15": generate_repo_15,
+    "repo_16": generate_repo_16, "repo_17": generate_repo_17, "repo_18": generate_repo_18,
+    "repo_19": generate_repo_19, "repo_20": generate_repo_20, "repo_21": generate_repo_21,
+    "repo_22": generate_repo_22, "repo_23": generate_repo_23, "repo_24": generate_repo_24,
+    "repo_25": generate_repo_25,
 }
 
 
