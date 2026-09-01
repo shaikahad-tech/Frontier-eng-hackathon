@@ -15,27 +15,26 @@ def patch_orchestrator():
     with open(path) as f:
         v = f.read()
 
-    # Fix VERIFICATION_WEIGHTS
-    v = v.replace(
-        '"PARTIALLY_VERIFIED": 0.75,\n    "UNKNOWN": 0.5,\n    "UNVERIFIED": 0.25,\n    "CONTRADICTED": 0.0,  # Suppressed entirely',
-        '"PARTIALLY_VERIFIED": 0.9,\n    "UNKNOWN": 0.95,\n    "UNVERIFIED": 0.7,\n    "CONTRADICTED": 0.3,  # Heavily penalized but not fully suppressed'
-    )
+    # Fix VERIFICATION_WEIGHTS (use regex for robustness)
+    v = re.sub(r'"PARTIALLY_VERIFIED":\s*0\.75', '"PARTIALLY_VERIFIED": 0.9', v)
+    v = re.sub(r'"UNKNOWN":\s*0\.5([,\s])', '"UNKNOWN": 0.95\\1', v)
+    v = re.sub(r'"UNVERIFIED":\s*0\.25', '"UNVERIFIED": 0.7', v)
+    v = re.sub(r'"CONTRADICTED":\s*0\.0.*', '"CONTRADICTED": 0.3,  # Heavily penalized but not fully suppressed', v)
 
-    # Fix test_count field name in hard gate
-    v = v.replace(
-        'if not testing_raw.get("has_tests", False):',
-        'test_file_count = testing_raw.get("test_file_count", 0)\n        test_function_count = testing_raw.get("test_function_count", 0)\n        has_tests = test_file_count > 0 or test_function_count > 0\n        if not has_tests:'
-    )
+    # Fix test_count field name in hard gate (use regex for robustness)
+    v = re.sub(
+        r'if not testing_raw\.get\("has_tests"\)',
+        'test_file_count = testing_raw.get("test_file_count", 0)\n        test_function_count = testing_raw.get("test_function_count", 0)\n        has_tests = test_file_count > 0 or test_function_count > 0\n        if not has_tests:', v)
 
-    # Fix confidence formula
-    v = v.replace(
-        'adjusted_confidence = avg_confidence * (0.5 + 0.5 * verify_metrics["weighted_verification_rate"])\n        else:\n            adjusted_confidence = avg_confidence * 0.5',
-        'adjusted_confidence = avg_confidence * (0.7 + 0.3 * verify_metrics["weighted_verification_rate"])\n        else:\n            adjusted_confidence = avg_confidence * 0.7'
-    )
+    # Fix confidence formula (use regex for robustness)
+    v = re.sub(r'0\.5 \+ 0\.5 \* verify_metrics', '0.7 + 0.3 * verify_metrics', v)
+    v = re.sub(r'adjusted_confidence = avg_confidence \* 0\.5$',
+               'adjusted_confidence = avg_confidence * 0.7', v, flags=re.MULTILINE)
 
-    # Add calibration after gated_score
-    old = '        final_score = weighted_sum / total_weight if total_weight > 0 else 0\n        gated_score, gate_reasons = self._apply_hard_gates(final_score, agent_results, evidence)'
-    new = old + '''
+    # Add calibration after gated_score (check if not already added)
+    if '_calibrate' not in v:
+        old = '        final_score = weighted_sum / total_weight if total_weight > 0 else 0\n        gated_score, gate_reasons = self._apply_hard_gates(final_score, agent_results, evidence)'
+        new = old + '''
 
         # Calibration: stretch scores to use full 0-100 range
         def _calibrate(raw):
@@ -46,7 +45,7 @@ def patch_orchestrator():
             elif raw < 85: return 75 + (raw - 70) * 1.0
             else: return min(100, 90 + (raw - 85) * 0.67)
         gated_score = _calibrate(gated_score)'''
-    v = v.replace(old, new)
+        v = v.replace(old, new)
 
     with open(path, "w") as f:
         f.write(v)
@@ -63,6 +62,7 @@ def patch_specialists():
     s = s.replace('"build_packaging"', '"build"')
     s = s.replace('"git_maturity"', '"git"')
     s = s.replace('"release_versioning"', '"release"')
+    s = s.replace('"security_sast"', '"security"')
 
     with open(path, "w") as f:
         f.write(s)
@@ -96,6 +96,22 @@ def patch_verification():
     v = v.replace(
         'commit_count = git_raw.get("commit_count", 0)',
         'commit_count = git_raw.get("total_commits", git_raw.get("commit_count", 0))'
+    )
+
+    # Fix _verify_test_count to use correct field names
+    v = v.replace(
+        'has_tests = testing_raw.get("has_tests", False)\n            test_count = testing_raw.get("test_count", 0)',
+        'test_file_count = testing_raw.get("test_file_count", 0)\n            test_function_count = testing_raw.get("test_function_count", 0)\n            has_tests = test_file_count > 0 or test_function_count > 0'
+    )
+    v = v.replace(
+        'supporting.append(f"testing: {test_count} tests detected")',
+        'supporting.append(f"testing: {test_function_count} test functions in {test_file_count} files")'
+    )
+
+    # Fix _verify_test_pass to use correct field names
+    v = v.replace(
+        'if testing_raw and testing_raw.get("has_tests"):',
+        'if testing_raw and (testing_raw.get("test_file_count", 0) > 0 or testing_raw.get("test_function_count", 0) > 0):'
     )
 
     # Replace _verify_structure entirely
