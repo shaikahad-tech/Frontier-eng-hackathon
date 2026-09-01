@@ -171,7 +171,7 @@ class VerificationAgent:
                 contradicting.append("test_execution: 0 tests passed")
         else:
             testing_raw = self.evidence.get_raw_data("testing")
-            if testing_raw and testing_raw.get("has_tests"):
+            if testing_raw and (testing_raw.get("test_file_count", 0) > 0 or testing_raw.get("test_function_count", 0) > 0):
                 supporting.append("testing: tests exist (execution not run)")
             else:
                 contradicting.append("No test execution data and no tests detected")
@@ -188,10 +188,11 @@ class VerificationAgent:
     def _verify_test_count(self, finding, supporting, contradicting):
         testing_raw = self.evidence.get_raw_data("testing")
         if testing_raw:
-            has_tests = testing_raw.get("has_tests", False)
-            test_count = testing_raw.get("test_count", 0)
+            test_file_count = testing_raw.get("test_file_count", 0)
+            test_function_count = testing_raw.get("test_function_count", 0)
+            has_tests = test_file_count > 0 or test_function_count > 0
             if has_tests:
-                supporting.append(f"testing: {test_count} tests detected")
+                supporting.append(f"testing: {test_function_count} test functions in {test_file_count} files")
             else:
                 if "no tests" in finding.claim.lower() or "missing" in finding.claim.lower():
                     supporting.append("testing: no tests detected (matches claim)")
