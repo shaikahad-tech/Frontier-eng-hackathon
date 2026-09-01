@@ -231,7 +231,7 @@ class VerificationAgent:
                 supporting.append("coverage analyzer ran but no percentage available")
 
     def _verify_security_findings(self, finding, supporting, contradicting):
-        sec_findings = self.evidence.get_findings("security_sast")
+        sec_findings = self.evidence.get_findings("security")
         secrets_findings = self.evidence.get_findings("secrets")
         vuln_findings = self.evidence.get_findings("vulnerability")
         total_sec = len(sec_findings) + len(secrets_findings) + len(vuln_findings)
@@ -243,19 +243,19 @@ class VerificationAgent:
                 details.append(f"secret:{f.get('severity', 'unknown')}")
             supporting.append(f"security: {total_sec} findings confirmed ({', '.join(details)})")
         else:
-            sec_raw = self.evidence.get_raw_data("security_sast")
+            sec_raw = self.evidence.get_raw_data("security")
             if sec_raw is not None:
-                supporting.append("security_sast ran: 0 findings (analyzers executed)")
+                supporting.append("security ran: 0 findings (analyzers executed)")
 
     def _verify_no_security(self, finding, supporting, contradicting):
-        sec_findings = self.evidence.get_findings("security_sast")
+        sec_findings = self.evidence.get_findings("security")
         secrets_findings = self.evidence.get_findings("secrets")
         vuln_findings = self.evidence.get_findings("vulnerability")
         total_sec = len(sec_findings) + len(secrets_findings) + len(vuln_findings)
         if total_sec == 0:
-            sec_raw = self.evidence.get_raw_data("security_sast")
+            sec_raw = self.evidence.get_raw_data("security")
             if sec_raw is not None:
-                supporting.append("security_sast: 0 findings (analyzers executed, none found)")
+                supporting.append("security: 0 findings (analyzers executed, none found)")
         else:
             contradicting.append(f"security: {total_sec} findings found (claim says no issues)")
 
@@ -273,28 +273,34 @@ class VerificationAgent:
     def _verify_documentation(self, finding, supporting, contradicting):
         doc_raw = self.evidence.get_raw_data("documentation")
         if doc_raw:
-            has_readme = doc_raw.get("has_readme", False)
-            readme_size = doc_raw.get("readme_size", 0)
-            has_examples = doc_raw.get("has_examples", False)
-            if has_readme:
-                supporting.append(f"documentation: README present ({readme_size} bytes)")
+            readme_info = doc_raw.get("readme", {})
+            if isinstance(readme_info, dict):
+                has_readme = readme_info.get("found", False)
+                readme_size = readme_info.get("length_chars", 0)
             else:
-                contradicting.append("documentation: no README found")
-            if has_examples:
-                supporting.append("documentation: examples found")
+                has_readme = False
+                readme_size = 0
+            doc_score = doc_raw.get("score", 0)
+            if has_readme:
+                supporting.append(f"documentation: README found ({readme_size} chars, score {doc_score})")
+            else:
+                if "no" in finding.claim.lower() or "poor" in finding.claim.lower() or "missing" in finding.claim.lower():
+                    supporting.append("documentation: no README found (matches claim)")
+                else:
+                    contradicting.append("documentation: no README found")
 
     def _verify_git_activity(self, finding, supporting, contradicting):
-        git_raw = self.evidence.get_raw_data("git_maturity")
+        git_raw = self.evidence.get_raw_data("git")
         if git_raw:
-            commit_count = git_raw.get("commit_count", 0)
+            commit_count = git_raw.get("total_commits", git_raw.get("commit_count", 0))
             contributor_count = git_raw.get("contributor_count", 0)
             if commit_count > 0:
-                supporting.append(f"git_maturity: {commit_count} commits, {contributor_count} contributors")
+                supporting.append(f"git: {commit_count} commits, {contributor_count} contributors")
             else:
                 if "abandoned" in finding.claim.lower() or "stale" in finding.claim.lower():
-                    supporting.append("git_maturity: 0 commits (matches stale claim)")
+                    supporting.append("git: 0 commits (matches stale claim)")
                 else:
-                    contradicting.append("git_maturity: 0 commits")
+                    contradicting.append("git: 0 commits")
 
     def _verify_dependency_risk(self, finding, supporting, contradicting):
         dep_raw = self.evidence.get_raw_data("dependencies")
@@ -312,20 +318,19 @@ class VerificationAgent:
     def _verify_structure(self, finding, supporting, contradicting):
         struct_raw = self.evidence.get_raw_data("structure")
         if struct_raw:
-            has_src = struct_raw.get("has_src_dir", False)
-            has_tests = struct_raw.get("has_tests_dir", False)
-            has_packaging = struct_raw.get("has_packaging", False)
-            parts = []
-            if has_src:
-                parts.append("src/ dir")
-            if has_tests:
-                parts.append("tests/ dir")
-            if has_packaging:
-                parts.append("packaging")
-            if parts:
-                supporting.append(f"structure: {', '.join(parts)} detected")
+            struct_score = struct_raw.get("score", 0)
+            has_cyclic = len(struct_raw.get("cyclic_deps", [])) > 0
+            total_loc = struct_raw.get("total_loc", 0)
+            if struct_score >= 70 and not has_cyclic:
+                supporting.append(f"structure: good score ({struct_score}), no cyclic deps, {total_loc} LOC")
+            elif struct_score >= 50:
+                supporting.append(f"structure: moderate score ({struct_score})")
+            elif "poor" in finding.claim.lower() or "no" in finding.claim.lower():
+                supporting.append(f"structure: low score ({struct_score}) matches claim")
             else:
-                contradicting.append("structure: no standard directories found")
+                contradicting.append(f"structure: low score ({struct_score}) contradicts claim")
+        else:
+            supporting.append("structure analyzer ran (no data returned)")
 
     def _verify_ci_cd(self, finding, supporting, contradicting):
         ci_raw = self.evidence.get_raw_data("cicd")
